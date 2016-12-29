@@ -1,6 +1,8 @@
 package smux
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/binary"
 	"io"
 	"sync"
@@ -15,8 +17,12 @@ const (
 )
 
 const (
-	errBrokenPipe      = "broken pipe"
-	errInvalidProtocol = "invalid protocol version"
+	errBrokenPipe         = "broken pipe"
+	errEncryptionNotReady = "encryption not ready yet"
+	errNoEncryptionKey    = "no encryption key"
+	errBadKeyExchange     = "malformed key exchange"
+	errBadKey             = "cannot decrypt the message"
+	errInvalidProtocol    = "invalid protocol version"
 )
 
 type writeRequest struct {
@@ -53,9 +59,14 @@ type Session struct {
 	deadline atomic.Value
 
 	writes chan writeRequest
+
+	encrypted       bool
+	encryptionReady chan struct{} //flag encryption has been established
+
+	cryptStream *cipher.Stream
 }
 
-func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
+func newSession(config *Config, conn io.ReadWriteCloser, encrypted bool, client bool) *Session {
 	s := new(Session)
 	s.die = make(chan struct{})
 	s.conn = conn
@@ -68,6 +79,8 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 		return make([]byte, (1<<16)+headerSize)
 	}
 	s.writes = make(chan writeRequest)
+	s.encrypted = encrypted
+	s.encryptionReady = make(chan struct{})
 
 	if client {
 		s.nextStreamID = 1
@@ -77,6 +90,9 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 	go s.recvLoop()
 	go s.sendLoop()
 	go s.keepalive()
+	if client && encrypted {
+		go s.exchangeKeys()
+	}
 	return s
 }
 
@@ -84,6 +100,10 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 func (s *Session) OpenStream() (*Stream, error) {
 	if s.IsClosed() {
 		return nil, errors.New(errBrokenPipe)
+	}
+
+	if !s.requireEncryption() {
+		return nil, errors.New(errEncryptionNotReady)
 	}
 
 	sid := atomic.AddUint32(&s.nextStreamID, 2)
@@ -108,6 +128,11 @@ func (s *Session) AcceptStream() (*Stream, error) {
 		defer timer.Stop()
 		deadline = timer.C
 	}
+
+	if !s.requireEncryption() {
+		return nil, errors.New(errEncryptionNotReady)
+	}
+
 	select {
 	case stream := <-s.chAccepts:
 		return stream, nil
@@ -147,6 +172,20 @@ func (s *Session) IsClosed() bool {
 	default:
 		return false
 	}
+}
+
+func (s *Session) requireEncryption() bool {
+	tickerTimeout := time.NewTicker(s.config.KeyHandshakeTimeout)
+	defer tickerTimeout.Stop()
+	if s.encrypted {
+		select {
+		case <-s.encryptionReady:
+			return true
+		case <-tickerTimeout.C:
+			return false
+		}
+	}
+	return true
 }
 
 // NumStreams returns the number of currently open streams
@@ -208,6 +247,11 @@ func (s *Session) readFrame(buffer []byte) (f Frame, err error) {
 			return f, errors.Wrap(err, "readFrame")
 		}
 		f.data = buffer[headerSize : headerSize+length]
+		if s.encrypted && f.cmd == cmdPSH {
+			if err := decrypt(s.cryptStream, f.data, f.data); err != nil {
+				return f, errors.Wrap(err, "readFrame")
+			}
+		}
 	}
 	return f, nil
 }
@@ -242,6 +286,19 @@ func (s *Session) recvLoop() {
 					}
 				}
 				s.streamLock.Unlock()
+			case cmdKXR:
+				key, err := verifyKeyExchange(&s.config.ServerPrivateKey, f.data)
+				if err != nil {
+
+					s.Close()
+					return
+				}
+				s.setEncryptionStream(key)
+				s.writeFrame(newKXSFrame(f.data))
+				close(s.encryptionReady)
+			case cmdKXS:
+				// server accepted the encryption key
+				close(s.encryptionReady)
 			case cmdRST:
 				s.streamLock.Lock()
 				if stream, ok := s.streams[f.sid]; ok {
@@ -289,6 +346,38 @@ func (s *Session) keepalive() {
 	}
 }
 
+func (s *Session) exchangeKeys() {
+	pubKey, privKey, err := newKeyPair()
+	if err != nil {
+		s.Close()
+		return
+	}
+	secret := newSecret(privKey, &s.config.ServerPublicKey)
+	data, err := sealSecret(secret, pubKey)
+	if err != nil {
+		s.Close()
+		return
+	}
+
+	s.setEncryptionStream(secret)
+
+	s.writeFrame(newKXRFrame(data))
+	s.bucketCond.Signal() // force a signal to the recvLoop
+}
+
+func (s *Session) setEncryptionStream(key *[32]byte) error {
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return err
+	}
+
+	// If the key is unique for each ciphertext, then it's ok to use a zero IV.
+	var iv [aes.BlockSize]byte
+	stream := cipher.NewOFB(block, iv[:])
+	s.cryptStream = &stream
+	return nil
+}
+
 func (s *Session) sendLoop() {
 	for {
 		select {
@@ -333,6 +422,12 @@ func (s *Session) writeFrame(f Frame) (n int, err error) {
 		frame:  f,
 		result: make(chan writeResult, 1),
 	}
+	if s.encrypted && req.frame.cmd == cmdPSH {
+		if err := encrypt(s.cryptStream, req.frame.data, req.frame.data); err != nil {
+			return 0, err
+		}
+	}
+
 	select {
 	case <-s.die:
 		return 0, errors.New(errBrokenPipe)
