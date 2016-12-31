@@ -63,7 +63,8 @@ type Session struct {
 	encrypted       bool
 	encryptionReady chan struct{} //flag encryption has been established
 
-	cryptStream *cipher.Stream
+	cryptStreamLock sync.Mutex
+	cryptStream     *cipher.Stream
 }
 
 func newSession(config *Config, conn io.ReadWriteCloser, encrypted bool, client bool) *Session {
@@ -248,7 +249,7 @@ func (s *Session) readFrame(buffer []byte) (f Frame, err error) {
 		}
 		f.data = buffer[headerSize : headerSize+length]
 		if s.encrypted && f.cmd == cmdPSH {
-			if err := decrypt(s.cryptStream, f.data, f.data); err != nil {
+			if err := decrypt(s, f.data, f.data); err != nil {
 				return f, errors.Wrap(err, "readFrame")
 			}
 		}
@@ -366,6 +367,8 @@ func (s *Session) exchangeKeys() {
 }
 
 func (s *Session) setEncryptionStream(key *[32]byte) error {
+	s.cryptStreamLock.Lock()
+	defer s.cryptStreamLock.Unlock()
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return err
@@ -423,7 +426,7 @@ func (s *Session) writeFrame(f Frame) (n int, err error) {
 		result: make(chan writeResult, 1),
 	}
 	if s.encrypted && req.frame.cmd == cmdPSH {
-		if err := encrypt(s.cryptStream, req.frame.data, req.frame.data); err != nil {
+		if err := encrypt(s, req.frame.data, req.frame.data); err != nil {
 			return 0, err
 		}
 	}

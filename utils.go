@@ -1,7 +1,6 @@
 package smux
 
 import (
-	"crypto/cipher"
 	"crypto/rand"
 	"errors"
 
@@ -64,18 +63,17 @@ func verifyKeyExchange(privKey *[32]byte, data []byte) (*[32]byte, error) {
 	return &sharedKey, nil
 }
 
-func decrypt(s *cipher.Stream, dst []byte, src []byte) error {
-	if s == nil {
+func decrypt(s *Session, dst []byte, src []byte) error {
+	s.cryptStreamLock.Lock()
+	defer s.cryptStreamLock.Unlock()
+	if s.cryptStream == nil {
 		return errors.New(errNoEncryptionKey)
 	}
-	(*s).XORKeyStream(dst, src)
+	(*s.cryptStream).XORKeyStream(dst, src)
 	return nil
 }
 
-func encrypt(s *cipher.Stream, dst []byte, src []byte) error {
-	if s == nil {
-		return errors.New(errNoEncryptionKey)
-	}
-	(*s).XORKeyStream(dst, src)
-	return nil
+func encrypt(s *Session, dst []byte, src []byte) error {
+	// encrypt and decrypt are symmetric
+	return decrypt(s, dst, src)
 }
