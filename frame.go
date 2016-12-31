@@ -14,6 +14,8 @@ const ( // cmds
 	cmdRST             // stream close
 	cmdPSH             // data push
 	cmdNOP             // no operation
+	cmdKXS             // key exchange sent
+	cmdKXR             // key exchange received
 )
 
 const (

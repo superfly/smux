@@ -17,6 +17,10 @@ type Config struct {
 	// will be closed if no data has arrived
 	KeepAliveTimeout time.Duration
 
+	// KeyHandshakeTimeout is the max time allowed for
+	// encryption key exchange to happen
+	KeyHandshakeTimeout time.Duration
+
 	// MaxFrameSize is used to control the maximum
 	// frame size to sent to the remote
 	MaxFrameSize int
@@ -24,15 +28,24 @@ type Config struct {
 	// MaxReceiveBuffer is used to control the maximum
 	// number of data in the buffer pool
 	MaxReceiveBuffer int
+
+	// ServerPrivateKey is used by the server to decrypt the shared key
+	// sent during initial key exchange
+	ServerPrivateKey [32]byte
+
+	// ServerPublicKey is used by the client to encrypt the shared key
+	// sent during the initial key exchange
+	ServerPublicKey [32]byte
 }
 
 // DefaultConfig is used to return a default configuration
 func DefaultConfig() *Config {
 	return &Config{
-		KeepAliveInterval: 10 * time.Second,
-		KeepAliveTimeout:  30 * time.Second,
-		MaxFrameSize:      4096,
-		MaxReceiveBuffer:  4194304,
+		KeepAliveInterval:   10 * time.Second,
+		KeepAliveTimeout:    30 * time.Second,
+		KeyHandshakeTimeout: 10 * time.Second,
+		MaxFrameSize:        4096,
+		MaxReceiveBuffer:    4194304,
 	}
 }
 
@@ -64,7 +77,17 @@ func Server(conn io.ReadWriteCloser, config *Config) (*Session, error) {
 	if err := VerifyConfig(config); err != nil {
 		return nil, err
 	}
-	return newSession(config, conn, false), nil
+	return newSession(config, conn, false, false), nil
+}
+
+func EncryptedServer(conn io.ReadWriteCloser, config *Config) (*Session, error) {
+	if config == nil {
+		config = DefaultConfig()
+	}
+	if err := VerifyConfig(config); err != nil {
+		return nil, err
+	}
+	return newSession(config, conn, true, false), nil
 }
 
 // Client is used to initialize a new client-side connection.
@@ -76,5 +99,17 @@ func Client(conn io.ReadWriteCloser, config *Config) (*Session, error) {
 	if err := VerifyConfig(config); err != nil {
 		return nil, err
 	}
-	return newSession(config, conn, true), nil
+	return newSession(config, conn, false, true), nil
+}
+
+// Client is used to initialize a new client-side connection.
+func EncryptedClient(conn io.ReadWriteCloser, config *Config) (*Session, error) {
+	if config == nil {
+		config = DefaultConfig()
+	}
+
+	if err := VerifyConfig(config); err != nil {
+		return nil, err
+	}
+	return newSession(config, conn, true, true), nil
 }

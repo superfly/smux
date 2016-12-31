@@ -39,7 +39,7 @@ func newStream(id uint32, frameSize int, sess *Session) *Stream {
 
 // ID returns the unique stream ID.
 func (s *Stream) ID() uint32 {
-    return s.id
+	return s.id
 }
 
 // Read implements io.ReadWriteCloser
