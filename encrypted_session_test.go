@@ -394,6 +394,130 @@ func TestEncryptedServerEcho(t *testing.T) {
 	}
 }
 
+func TestEncryptedServerSend(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:39988")
+	if err != nil {
+		// handle error
+		panic(err)
+	}
+	sentCh := make(chan string)
+	go func() {
+		if conn, err := ln.Accept(); err == nil {
+			session, err := newTestServer(conn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stream, err := session.OpenStream(); err == nil {
+				const N = 100
+				var sent string
+				for i := 0; i < N; i++ {
+					msg := fmt.Sprintf("hello%v", i)
+					if _, err := stream.Write([]byte(msg)); err != nil {
+						t.Fatal(err)
+					}
+					sent += msg
+				}
+				stream.Close()
+				sentCh <- sent
+				close(sentCh)
+			} else {
+				t.Fatal(err)
+			}
+		} else {
+			t.Fatal(err)
+		}
+	}()
+
+	cli, err := net.Dial("tcp", "127.0.0.1:39988")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session, err := newTestClient(cli); err == nil {
+		if stream, err := session.AcceptStream(); err == nil {
+			buf := make([]byte, 65536)
+			var received string
+			for {
+				n, err := stream.Read(buf)
+				if err != nil {
+					break
+				}
+				received += string(buf[:n])
+			}
+			sent := <-sentCh
+			if sent != received {
+				t.Fatalf("Expected sent '%s' to equal received: '%s'\n", sent, received)
+			}
+
+		} else {
+			t.Fatal(err)
+		}
+	} else {
+		t.Fatal(err)
+	}
+}
+
+func TestEncryptedClientSend(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:39978")
+	if err != nil {
+		// handle error
+		panic(err)
+	}
+	sentCh := make(chan string)
+	go func() {
+		if conn, err := ln.Accept(); err == nil {
+			session, err := newTestClient(conn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stream, err := session.OpenStream(); err == nil {
+				const N = 100
+				var sent string
+				for i := 0; i < N; i++ {
+					msg := fmt.Sprintf("hello%v", i)
+					if _, err := stream.Write([]byte(msg)); err != nil {
+						t.Fatal(err)
+					}
+					sent += msg
+				}
+				stream.Close()
+				sentCh <- sent
+				close(sentCh)
+			} else {
+				t.Fatal(err)
+			}
+		} else {
+			t.Fatal(err)
+		}
+	}()
+
+	cli, err := net.Dial("tcp", "127.0.0.1:39978")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session, err := newTestServer(cli); err == nil {
+		if stream, err := session.AcceptStream(); err == nil {
+			buf := make([]byte, 65536)
+			var received string
+			for {
+				n, err := stream.Read(buf)
+				if err != nil {
+					break
+				}
+				received += string(buf[:n])
+			}
+			sent := <-sentCh
+			if sent != received {
+				t.Fatalf("Expected sent '%s' to equal received: '%s'\n", sent, received)
+			}
+
+		} else {
+			t.Fatal(err)
+		}
+	} else {
+		t.Fatal(err)
+	}
+}
+
 func TestEncryptedSendWithoutRecv(t *testing.T) {
 	cli, err := net.Dial("tcp", "127.0.0.1:19998")
 	if err != nil {

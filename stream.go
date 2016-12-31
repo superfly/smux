@@ -104,6 +104,11 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 			frame:  frames[k],
 			result: make(chan writeResult, 1),
 		}
+		if s.sess.encrypted && req.frame.cmd == cmdPSH {
+			if err := encrypt(s.sess.cryptStream, req.frame.data, req.frame.data); err != nil {
+				return 0, err
+			}
+		}
 
 		select {
 		case s.sess.writes <- req:
