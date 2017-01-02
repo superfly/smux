@@ -2,9 +2,11 @@ package smux
 
 import (
 	crand "crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"strings"
@@ -178,7 +180,10 @@ func TestEncryptedParallel(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(par)
 	for i := 0; i < par; i++ {
-		stream, _ := session.OpenStream()
+		stream, err := session.OpenStream()
+		if err != nil {
+			t.Fatal(err)
+		}
 		go func(s *Stream) {
 			buf := make([]byte, 20)
 			for j := 0; j < messages; j++ {
@@ -243,7 +248,10 @@ func TestEncryptedConcurrentClose(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numStreams)
 	for i := 0; i < 100; i++ {
-		stream, _ := session.OpenStream()
+		stream, err := session.OpenStream()
+		if err != nil {
+			t.Fatal(err)
+		}
 		streams = append(streams, stream)
 	}
 	for _, s := range streams {
@@ -266,7 +274,10 @@ func TestEncryptedTinyReadBuffer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, _ := session.OpenStream()
+	stream, err := session.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
 	const N = 100
 	tinybuf := make([]byte, 6)
 	var sent string
@@ -343,7 +354,7 @@ func TestEncryptedServerEcho(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:39998")
 	if err != nil {
 		// handle error
-		panic(err)
+		t.Fatal(err)
 	}
 	go func() {
 		if conn, err := ln.Accept(); err == nil {
@@ -398,7 +409,7 @@ func TestEncryptedServerSend(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:39988")
 	if err != nil {
 		// handle error
-		panic(err)
+		t.Fatal(err)
 	}
 	sentCh := make(chan string)
 	go func() {
@@ -460,7 +471,7 @@ func TestEncryptedClientSend(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:39978")
 	if err != nil {
 		// handle error
-		panic(err)
+		t.Fatal(err)
 	}
 	sentCh := make(chan string)
 	go func() {
@@ -549,7 +560,10 @@ func TestEncryptedWriteAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, _ := session.OpenStream()
+	stream, err := session.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
 	stream.Close()
 	if _, err := stream.Write([]byte("write after close")); err == nil {
 		t.Fatal("write after close failed")
@@ -598,8 +612,6 @@ func TestEncryptedNumStreamAfterClose(t *testing.T) {
 	cli.Close()
 }
 
-/*
-TODO: failing
 func TestEncryptedRandomFrame(t *testing.T) {
 	// pure random
 	cli, err := net.Dial("tcp", "127.0.0.1:19998")
@@ -705,7 +717,6 @@ func TestEncryptedRandomFrame(t *testing.T) {
 	t.Log(rawHeader(buf))
 	cli.Close()
 }
-*/
 
 func TestEncryptedReadDeadline(t *testing.T) {
 	cli, err := net.Dial("tcp", "127.0.0.1:19998")
@@ -716,7 +727,10 @@ func TestEncryptedReadDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, _ := session.OpenStream()
+	stream, err := session.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
 	const N = 100
 	buf := make([]byte, 10)
 	var readErr error
@@ -747,7 +761,10 @@ func TestEncryptedWriteDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, _ := session.OpenStream()
+	stream, err := session.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
 	const N = 100
 	buf := make([]byte, 10)
 	var writeErr error

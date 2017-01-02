@@ -60,8 +60,9 @@ type Session struct {
 
 	writes chan writeRequest
 
-	encrypted       bool
-	encryptionReady chan struct{} //flag encryption has been established
+	encrypted         bool
+	chEncryptionReady chan struct{} // flag encryption has been established
+	encryptionReady   int32         // flag encryption has been established
 
 	cryptStreamLock sync.Mutex
 	cryptStream     *cipher.Stream
@@ -81,7 +82,8 @@ func newSession(config *Config, conn io.ReadWriteCloser, encrypted bool, client 
 	}
 	s.writes = make(chan writeRequest)
 	s.encrypted = encrypted
-	s.encryptionReady = make(chan struct{})
+	s.chEncryptionReady = make(chan struct{})
+	atomic.StoreInt32(&s.encryptionReady, 0)
 
 	if client {
 		s.nextStreamID = 1
@@ -180,7 +182,7 @@ func (s *Session) requireEncryption() bool {
 	defer tickerTimeout.Stop()
 	if s.encrypted {
 		select {
-		case <-s.encryptionReady:
+		case <-s.chEncryptionReady:
 			return true
 		case <-tickerTimeout.C:
 			return false
@@ -288,18 +290,24 @@ func (s *Session) recvLoop() {
 				}
 				s.streamLock.Unlock()
 			case cmdKXR:
-				key, err := verifyKeyExchange(&s.config.ServerPrivateKey, f.data)
-				if err != nil {
+				// only set key once for the duration of the session
+				if atomic.CompareAndSwapInt32(&s.encryptionReady, 0, 1) {
+					key, err := verifyKeyExchange(&s.config.ServerPrivateKey, f.data)
+					if err != nil {
 
-					s.Close()
-					return
+						s.Close()
+						return
+					}
+					s.setEncryptionStream(key)
+					s.writeFrame(newKXSFrame(f.data))
+					close(s.chEncryptionReady)
 				}
-				s.setEncryptionStream(key)
-				s.writeFrame(newKXSFrame(f.data))
-				close(s.encryptionReady)
 			case cmdKXS:
-				// server accepted the encryption key
-				close(s.encryptionReady)
+				// only set key once for the duration of the session
+				if atomic.CompareAndSwapInt32(&s.encryptionReady, 0, 1) {
+					// server accepted the encryption key
+					close(s.chEncryptionReady)
+				}
 			case cmdRST:
 				s.streamLock.Lock()
 				if stream, ok := s.streams[f.sid]; ok {
