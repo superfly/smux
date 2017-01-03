@@ -66,6 +66,7 @@ type Session struct {
 
 	cryptStreamLock sync.Mutex
 	cryptStream     *cipher.Stream
+	encryptionKey   *[32]byte
 }
 
 func newSession(config *Config, conn io.ReadWriteCloser, encrypted bool, client bool) *Session {
@@ -386,6 +387,7 @@ func (s *Session) setEncryptionStream(key *[32]byte) error {
 	var iv [aes.BlockSize]byte
 	stream := cipher.NewOFB(block, iv[:])
 	s.cryptStream = &stream
+	s.encryptionKey = key
 	return nil
 }
 

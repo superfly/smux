@@ -1,6 +1,8 @@
 package smux
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"errors"
 
@@ -64,16 +66,35 @@ func verifyKeyExchange(privKey *[32]byte, data []byte) (*[32]byte, error) {
 }
 
 func decrypt(s *Session, dst []byte, src []byte) error {
+	/*tmp := make([]byte, len(src))
 	s.cryptStreamLock.Lock()
 	defer s.cryptStreamLock.Unlock()
 	if s.cryptStream == nil {
 		return errors.New(errNoEncryptionKey)
 	}
-	(*s.cryptStream).XORKeyStream(dst, src)
+	*/
+	s.cryptStreamLock.Lock()
+	defer s.cryptStreamLock.Unlock()
+	stream, err := newCipherStream(s.encryptionKey)
+	if err != nil {
+		return err
+	}
+	stream.XORKeyStream(dst, src)
 	return nil
 }
 
 func encrypt(s *Session, dst []byte, src []byte) error {
 	// encrypt and decrypt are symmetric
 	return decrypt(s, dst, src)
+}
+
+func newCipherStream(key *[32]byte) (cipher.Stream, error) {
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+
+	// If the key is unique for each ciphertext, then it's ok to use a zero IV.
+	var iv [aes.BlockSize]byte
+	return cipher.NewOFB(block, iv[:]), nil
 }
