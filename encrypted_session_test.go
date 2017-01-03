@@ -202,6 +202,137 @@ func TestEncryptedParallel(t *testing.T) {
 	session.Close()
 }
 
+func TestEncryptedParallelServerSend(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:39978")
+	if err != nil {
+		t.Fatal(err)
+	}
+	par := 1000
+	messages := 100
+	var sg, cg sync.WaitGroup
+	sg.Add(par)
+	cg.Add(par)
+
+	type streamData struct {
+		streamID int
+		msg      string
+	}
+	sentCh := make(chan streamData)
+	receivedCh := make(chan streamData)
+	die := make(chan bool)
+	done := make(chan bool)
+	errCh := make(chan error)
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			errCh <- err
+		}
+		session, err := newTestServer(conn)
+		if err != nil {
+			errCh <- err
+		}
+		for i := 0; i < par; i++ {
+			defer sg.Done()
+			go func(i int) {
+				select {
+				case <-die:
+					return
+				default:
+				}
+
+				stream, err := session.OpenStream()
+				if err != nil {
+					errCh <- err
+				}
+				var sent string
+				for j := 0; j < messages; j++ {
+					select {
+					case <-die:
+						return
+					default:
+					}
+					msg := fmt.Sprintf("hello%v-%v", i, j)
+					if _, err := stream.Write([]byte(msg)); err != nil {
+						errCh <- err
+					}
+					sent += msg
+				}
+				stream.Close()
+				sentCh <- streamData{streamID: int(stream.ID()), msg: sent}
+			}(i)
+		}
+	}()
+
+	cli, err := net.Dial("tcp", "127.0.0.1:39978")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := newTestClient(cli)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < par; i++ {
+		go func(i int) {
+			select {
+			case <-die:
+				return
+			default:
+			}
+			stream, err := session.AcceptStream()
+			if err != nil {
+				errCh <- err
+			}
+			buf := make([]byte, 65536)
+			var received string
+			for {
+				select {
+				case <-die:
+					return
+				default:
+				}
+				n, err := stream.Read(buf)
+				if err != nil && err == io.EOF {
+					break
+				} else if err != nil {
+					errCh <- err
+				}
+				received += string(buf[:n])
+			}
+			receivedCh <- streamData{streamID: int(stream.ID()), msg: received}
+			cg.Done()
+		}(i)
+	}
+
+	go func() {
+		sg.Wait()
+		cg.Wait()
+		close(done)
+	}()
+
+	received := make(map[int]string)
+	sent := make(map[int]string)
+
+	for {
+		select {
+		case s := <-sentCh:
+			sent[s.streamID] = s.msg
+		case r := <-receivedCh:
+			received[r.streamID] = r.msg
+		case err := <-errCh:
+			close(die)
+			t.Fatal(err)
+		case <-done:
+			for k := range received {
+				if received[k] != sent[k] {
+					t.Fatalf("Expected sent '%s' to equal received: '%s'\n", sent[k], received[k])
+				}
+			}
+			return
+		}
+	}
+}
+
 func TestEncryptedCloseThenOpen(t *testing.T) {
 	cli, err := net.Dial("tcp", "127.0.0.1:19998")
 	if err != nil {
@@ -307,7 +438,7 @@ func TestEncryptedTinyReadBuffer(t *testing.T) {
 }
 
 func TestEncryptedIsClose(t *testing.T) {
-	cli, err := net.Dial("tcp", "127.0.0.1:19999")
+	cli, err := net.Dial("tcp", "127.0.0.1:19998")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +453,7 @@ func TestEncryptedIsClose(t *testing.T) {
 }
 
 func TestEncryptedKeepAliveTimeout(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:29999")
+	ln, err := net.Listen("tcp", "127.0.0.1:29998")
 	if err != nil {
 		// handle error
 		panic(err)
@@ -331,7 +462,7 @@ func TestEncryptedKeepAliveTimeout(t *testing.T) {
 		ln.Accept()
 	}()
 
-	cli, err := net.Dial("tcp", "127.0.0.1:29999")
+	cli, err := net.Dial("tcp", "127.0.0.1:29998")
 	if err != nil {
 		t.Fatal(err)
 	}
