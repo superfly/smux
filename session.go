@@ -60,6 +60,7 @@ type Session struct {
 
 	writes chan writeRequest
 
+	client            bool
 	encrypted         bool
 	chEncryptionReady chan struct{} // flag encryption has been established
 	encryptionReady   int32         // flag encryption has been established
@@ -84,6 +85,7 @@ func newSession(config *Config, conn io.ReadWriteCloser, encrypted bool, client 
 	s.writes = make(chan writeRequest)
 	s.encrypted = encrypted
 	s.chEncryptionReady = make(chan struct{})
+	s.client = client
 	atomic.StoreInt32(&s.encryptionReady, 0)
 
 	if client {
@@ -292,7 +294,7 @@ func (s *Session) recvLoop() {
 				s.streamLock.Unlock()
 			case cmdKXR:
 				// only set key once for the duration of the session
-				if atomic.CompareAndSwapInt32(&s.encryptionReady, 0, 1) {
+				if !s.client && atomic.CompareAndSwapInt32(&s.encryptionReady, 0, 1) {
 					key, err := verifyKeyExchange(&s.config.ServerPrivateKey, f.data)
 					if err != nil {
 
@@ -301,12 +303,15 @@ func (s *Session) recvLoop() {
 					}
 					s.setEncryptionStream(key)
 					s.writeFrame(newKXSFrame(f.data))
-					close(s.chEncryptionReady)
 				}
 			case cmdKXS:
 				// only set key once for the duration of the session
 				if atomic.CompareAndSwapInt32(&s.encryptionReady, 0, 1) {
 					// server accepted the encryption key
+					s.writeFrame(newKXSFrame(f.data))
+					close(s.chEncryptionReady)
+				} else {
+					// client accepted the encryption key
 					close(s.chEncryptionReady)
 				}
 			case cmdRST:
